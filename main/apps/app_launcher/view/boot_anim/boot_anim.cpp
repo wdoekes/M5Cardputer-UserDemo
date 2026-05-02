@@ -57,7 +57,6 @@ void Launcher::boot_anim()
 
     // Show boot image
     GetHAL().display.pushImage(0, 0, 240, 135, image_data_logo);
-    GetHAL().display.fillRect(195, 113, 40, 19, (uint32_t)0xE6E6E6);
     GetHAL().display.setFont(&fonts::efontCN_16);
     GetHAL().display.setTextColor((uint32_t)0x999999);
     int textWidth = GetHAL().display.textWidth(FW_VERSION);
@@ -68,6 +67,8 @@ void Launcher::boot_anim()
     GetHAL().speaker.setVolume(64);
     GetHAL().speaker.playWav(boot_sfx, sizeof(boot_sfx));
 #endif
+    // Quiet(er) mode, re-enable sound using Q.
+    audio::set_keyboard_sfx_enable(false);
 
     // Wait enter
     int egg_count = 0;
@@ -79,6 +80,7 @@ void Launcher::boot_anim()
         if (GetHAL().homeButton.wasPressed()) {
             GetHAL().speaker.setVolume(90);
             audio::play_random_tone();
+            audio::set_keyboard_sfx_enable(true);
             break;
         }
         auto key_event = GetHAL().keyboard.getLatestKeyEvent();
@@ -95,7 +97,19 @@ void Launcher::boot_anim()
                 }
             }
 
+        } else if (!key_event.state && key_event.keyCode == KEY_Q) {
+            if (egg_count) {
+                // Propagate quiet mode to elsewhere.
+                GetHAL().speaker.setVolume(0);
+                egg_count--;
+            } else {
+                break;
+            }
+
         } else if (!key_event.state && key_event.keyCode != KEY_NONE) {
+            GetHAL().speaker.setVolume(90);
+            audio::play_random_tone();
+            audio::set_keyboard_sfx_enable(true);
             break;
         }
     }
