@@ -65,7 +65,7 @@ void Launcher::boot_anim()
 
     // Play sfx
 #ifndef NO_BOOT_PLAY
-    GetHAL().speaker.setVolume(255);
+    GetHAL().speaker.setVolume(64);
     GetHAL().speaker.playWav(boot_sfx, sizeof(boot_sfx));
 #endif
 
