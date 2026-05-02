@@ -41,7 +41,7 @@ void Launcher::render_system_bar()
     static struct tm timeinfo;
     time(&now);
     localtime_r(&now, &timeinfo);
-    _data.system_state.time = fmt::format("{:02d}:{:02d}", timeinfo.tm_hour, timeinfo.tm_min);
+    _data.system_state.time = fmt::format("{:02d}:{:02d} UTC", timeinfo.tm_hour, timeinfo.tm_min);
 
     // Bat
     if ((GetHAL().millis() - _data.bat_update_time_count) > 5000 || _data.bat_update_time_count == 0) {
