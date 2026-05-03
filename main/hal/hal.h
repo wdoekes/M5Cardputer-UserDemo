@@ -6,6 +6,7 @@
 #pragma once
 #include "keyboard/keyboard.h"
 #include "cap_lora868/cap_lora868.h"
+#include "utils/power_profile/power_profile.h"
 #include "utils/settings/settings.h"
 #include <M5Unified.hpp>
 #include <M5GFX.h>
@@ -60,6 +61,7 @@ public:
     Keyboard keyboard;
 
     /* ---------------------------------- Power --------------------------------- */
+    PowerProfile powerProfile;
     inline uint8_t getBatLevel()
     {
         return M5.Power.getBatteryLevel();

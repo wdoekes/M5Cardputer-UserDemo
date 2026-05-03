@@ -36,10 +36,13 @@ void Hal::init()
     keyboard_init();
     setting_init();
     spi_init();
+
+    powerProfile.init();
 }
 
 void Hal::update()
 {
+    powerProfile.update();
     M5.update();
     keyboard.update();
     capLora868.update();
