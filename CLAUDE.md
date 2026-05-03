@@ -72,6 +72,24 @@ The firmware follows a simple HAL + app-framework pattern:
 
 Pin assignments are in `main/hal/hal_config.h`.
 
+### Display Geometry
+
+The physical display is 240x135.
+The HAL splits this across three sprites that are composed each frame by `pushCanvas`/`pushCanvasSystemBar`/`pushCanvasKeyboardBar`:
+
+- `canvasKeyboardBar` -- 36x135, drawn at display (0, 0). Modifier-key indicators on the left.
+- `canvasSystemBar` -- 204x26, drawn at display (36, 0). Status bar across the top-right.
+- `canvas` -- 204x109, drawn at display (36, 26). The main app content area.
+
+Apps render into `canvas` in **canvas-local coordinates**: (0, 0) is the top-left of the visible app area, (203, 108) is the bottom-right.
+The HAL handles the offset.
+Do not subtract gutters from your coordinates -- writing at canvas (0, 0) is already past the surrounding bars.
+Conversely, do not use coordinates beyond (203, 108) -- they are silently clipped by the sprite, not relocated.
+
+Common pitfall: assuming the canvas is 240x135.
+A 32-pixel-tall element placed at y=100 overflows the 109-tall canvas and only the top 9 rows render.
+When laying out vertically, treat the canvas as 109 px tall (not 135) and the keyboard bar / system bar as already accounted for.
+
 ### App Framework (Mooncake)
 Each app inherits from `mooncake::AppAbility` and overrides lifecycle methods:
 - `onCreate()` / `onOpen()` / `onRunning()` / `onClose()`
