@@ -8,4 +8,4 @@ For now, we put the claude stuff/helpers in a separate worktree (branch):
 
 Checkout using:
 
-    git worktree add -b x-agent ../M5Cardputer-UserDemo-agent
+    git worktree add ../M5Cardputer-UserDemo-agent [origin/]x-agent
