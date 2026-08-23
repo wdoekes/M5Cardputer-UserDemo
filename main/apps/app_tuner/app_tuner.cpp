@@ -127,7 +127,8 @@ void AppTuner::onClose()
 void AppTuner::reset_state()
 {
     _history.clear();
-    _shown = Shown();
+    _shown      = Shown();
+    _accidental = note::Accidental::Sharp;
 
     forget_candidate();
 
@@ -371,6 +372,18 @@ void AppTuner::forget_candidate()
 void AppTuner::handle_key_event(const Keyboard::KeyEvent_t& event)
 {
     if (event.isModifier) {
+        // Aa and Fn are the accidental modifiers for playing, so which one
+        // the player reaches for says which spelling they are thinking in.
+        // Follow it for the whole display. The keyboard reports Aa as
+        // KEY_LEFTSHIFT and the Fn key as a modifier with no key code at
+        // all -- see Keyboard::convertToKeyEvent().
+        if (event.state) {
+            if (event.keyCode == KEY_LEFTSHIFT) {
+                _accidental = note::Accidental::Sharp;
+            } else if (event.keyCode == KEY_NONE) {
+                _accidental = note::Accidental::Flat;
+            }
+        }
         return;
     }
 
@@ -426,6 +439,7 @@ void AppTuner::render()
     model.confidence   = _shown.confidence;
     model.played       = _shown.played;
     model.history      = &_history;
+    model.accidental   = _accidental;
 
     view::render(model);
 }

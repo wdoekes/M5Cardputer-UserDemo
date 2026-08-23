@@ -36,6 +36,13 @@ constexpr int A4 = 69;
 // and the whole app -- detection, naming and the played tones -- follows.
 constexpr float CONCERT_PITCH_HZ = 440.0f;
 
+// How a black key is spelled. The two are the same pitch -- Bb and A# are
+// one MIDI number -- so this is notation, never a different note.
+enum class Accidental {
+    Sharp,  // C#, D#, F#, G#, A#
+    Flat,   // Db, Eb, Gb, Ab, Bb
+};
+
 // Buffer size `format()` needs. The longest name it can produce is four
 // characters -- two of pitch class and two of octave, as in "C#-1" -- plus
 // the terminator.
@@ -90,7 +97,8 @@ float upper_edge_hz(int midi);
 float cents_off(int midi, float hz);
 
 // Writes a name like "C4" or "C#5" into `dst`, or "--" for note::NONE, and
-// returns `dst`. `dst_len` should be at least NAME_CAPACITY.
-const char* format(int midi, char* dst, size_t dst_len);
+// returns `dst`. `dst_len` should be at least NAME_CAPACITY. `style` picks
+// the spelling of the black keys.
+const char* format(int midi, char* dst, size_t dst_len, Accidental style = Accidental::Sharp);
 
 }  // namespace note

@@ -12,10 +12,14 @@ namespace note {
 
 namespace {
 
-// Indexed by pitch class. Sharps rather than flats, so a note reached with
-// Fn (flat) is named as its enharmonic sharp: Db4 reads as "C#4".
-const char* const PITCH_CLASS_NAMES[SEMITONES_PER_OCTAVE] = {"C",  "C#", "D",  "D#", "E",  "F",
-                                                             "F#", "G",  "G#", "A",  "A#", "B"};
+// Indexed by pitch class. The white keys are spelled the same either way;
+// only the five black keys differ.
+// clang-format off
+const char* const SHARP_NAMES[SEMITONES_PER_OCTAVE] = {"C",  "C#", "D",  "D#", "E",  "F",
+                                                       "F#", "G",  "G#", "A",  "A#", "B"};
+const char* const FLAT_NAMES[SEMITONES_PER_OCTAVE]  = {"C",  "Db", "D",  "Eb", "E",  "F",
+                                                       "Gb", "G",  "Ab", "A",  "Bb", "B"};
+// clang-format on
 
 // Shown in place of a name when there is nothing to name.
 const char* const NAME_NONE = "--";
@@ -68,14 +72,15 @@ float cents_off(int midi, float hz)
     return CENTS_PER_SEMITONE * SEMITONES_PER_OCTAVE * std::log2(hz / to_frequency(midi));
 }
 
-const char* format(int midi, char* dst, size_t dst_len)
+const char* format(int midi, char* dst, size_t dst_len, Accidental style)
 {
     if (midi == NONE) {
         std::snprintf(dst, dst_len, "%s", NAME_NONE);
     } else {
+        const char* const* names = (style == Accidental::Flat) ? FLAT_NAMES : SHARP_NAMES;
         // Scientific pitch notation: MIDI 0 is C-1, so C4 (60) is middle C.
         int octave = midi / SEMITONES_PER_OCTAVE - 1;
-        std::snprintf(dst, dst_len, "%s%d", PITCH_CLASS_NAMES[pitch_class(midi)], octave);
+        std::snprintf(dst, dst_len, "%s%d", names[pitch_class(midi)], octave);
     }
     return dst;
 }

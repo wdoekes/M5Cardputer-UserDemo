@@ -133,7 +133,7 @@ void print_centered(LGFX_Sprite& canvas, int center_x, int y, int char_w, const 
     canvas.print(text);
 }
 
-void draw_history(LGFX_Sprite& canvas, const NoteHistory& history)
+void draw_history(LGFX_Sprite& canvas, const NoteHistory& history, note::Accidental accidental)
 {
     canvas.setFont(FONT_REPL);
     canvas.setTextSize(FONT_SIZE_REPL);
@@ -142,7 +142,7 @@ void draw_history(LGFX_Sprite& canvas, const NoteHistory& history)
         const NoteHistory::Entry& entry = history[i];
 
         char name[note::NAME_CAPACITY];
-        note::format(entry.midi, name, sizeof(name));
+        note::format(entry.midi, name, sizeof(name), accidental);
         // Left-aligned and truncated to exactly one cell, so a name that
         // somehow runs long cannot push the column out of line.
         char cell[HISTORY_ENTRY_CHARS + 1];
@@ -212,7 +212,7 @@ void draw_listening_help(LGFX_Sprite& canvas)
 void draw_note_readout(LGFX_Sprite& canvas, const Model& model, uint16_t color)
 {
     char name[note::NAME_CAPACITY];
-    note::format(model.note, name, sizeof(name));
+    note::format(model.note, name, sizeof(name), model.accidental);
 
     canvas.setTextSize(BIG_NOTE_TEXT_SIZE);
     canvas.setTextColor(color, THEME_COLOR_BG);
@@ -281,7 +281,7 @@ void render(const Model& model)
     if (model.history->empty()) {
         draw_key_help(canvas);
     } else {
-        draw_history(canvas, *model.history);
+        draw_history(canvas, *model.history, model.accidental);
     }
 
     uint16_t color = model.played ? PLAYED_COLOR : DETECTED_COLOR;

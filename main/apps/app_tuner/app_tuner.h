@@ -96,6 +96,10 @@ private:
     tuner::NoteHistory _history;
     Shown _shown;
 
+    // How black keys are spelled on screen. Aa and Fn pick it, the same way
+    // they pick which accidental a pressed natural plays.
+    note::Accidental _accidental = note::Accidental::Sharp;
+
     // Note being watched for stability, and how long it has held up.
     int _candidate_note   = note::NONE;
     int _candidate_frames = 0;

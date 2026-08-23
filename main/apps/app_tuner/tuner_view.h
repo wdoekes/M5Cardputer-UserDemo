@@ -33,6 +33,10 @@ struct Model {
 
     // Recent notes for the side panel. Never null.
     const NoteHistory* history = nullptr;
+
+    // How the black keys are spelled, everywhere on screen at once. A panel
+    // mixing both spellings would read as an error rather than a choice.
+    note::Accidental accidental = note::Accidental::Sharp;
 };
 
 // Draws one frame and pushes it to the display.
