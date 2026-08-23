@@ -277,6 +277,13 @@ void AppTuner::update_audio(uint32_t now)
             } else if ((now - _cooldown_started_ms) >= COOLDOWN_MS) {
                 // Nothing followed: hand the I2S back to the mic. Whatever
                 // the detector was tracking heard our own tone, so drop it.
+                //
+                // This end() thumps. It is the amplifier powering down, not
+                // the waveform -- the last sample of a note is already zero
+                // -- and there is no fix from this side: the mic and the
+                // speaker share the I2S peripheral, so listening means
+                // tearing the speaker down. What the cooldown buys is that a
+                // run of notes only pays for it once, at the end.
                 GetHAL().speaker.end();
                 forget_candidate();
                 enter_listening();
