@@ -27,9 +27,15 @@ void Launcher::start_system_bar()
 
 void Launcher::update_system_bar()
 {
-    if ((GetHAL().millis() - _data.system_bar_update_count) > _data.system_bar_update_period) {
+    // Force an immediate redraw on Fn press/release so the mV overlay feels
+    // snappy; otherwise fall back to the regular ~1 s tick.
+    bool fn_state = GetHAL().keyboard.getFnState();
+    bool fn_changed = fn_state != _data.system_bar_last_fn_state;
+    bool tick_due = (GetHAL().millis() - _data.system_bar_update_count) > _data.system_bar_update_period;
+    if (fn_changed || tick_due) {
         render_system_bar();
         _data.system_bar_update_count = GetHAL().millis();
+        _data.system_bar_last_fn_state = fn_state;
     }
 }
 
@@ -53,7 +59,19 @@ void Launcher::render_system_bar()
     // Bat
     if ((GetHAL().millis() - _data.bat_update_time_count) > 5000 || _data.bat_update_time_count == 0) {
         auto bat_level               = GetHAL().getBatLevel();
-        _data.system_state.bat_level = fmt::format("{}", bat_level);
+	if (GetHAL().powerProfile.getState() == PowerProfile::State::POWERED) {
+	    _data.system_state.bat_level = "---";
+	} else if (GetHAL().powerProfile.getBatVoltageSlope_uVps() > 0.0f) {
+            // FIXME: show a plus if we're def charging and a minus if def not
+            // (maybe get better stats on how certain we are)
+	    _data.system_state.bat_level = fmt::format("{}+", bat_level);
+	} else if (GetHAL().powerProfile.getBatVoltageSlope_uVps() < 0.0f) {
+            // FIXME: show a plus if we're def charging and a minus if def not
+            // (maybe get better stats on how certain we are)
+	    _data.system_state.bat_level = fmt::format("{}-", bat_level);
+	} else {
+	    _data.system_state.bat_level = fmt::format("{}", bat_level);
+        }
         // mclog::tagInfo("system_bar", "get bat level: {}", bat_level);
         // printf("b:%d\n", bat_level);
 
@@ -108,25 +126,49 @@ void Launcher::render_system_bar()
         GetHAL().canvasSystemBar.pushImage(x + 18, y, 16, 16, image_data_quiet);
     }
 
-    // Bat icon
+    // Bat icon -- or, while Fn is held, swap the icon + percent for the live
+    // mV reading at the same spot. Lets us read voltage at a glance during
+    // power-saving experiments without giving up the bar in normal use.
     x = GetHAL().canvasSystemBar.width() - 45;
     y = 5;
 
-    if (_data.system_state.bat_state == 1) {
-        GetHAL().canvasSystemBar.pushImage(x, y, 32, 16, image_data_bat1);
-    } else if (_data.system_state.bat_state == 2) {
-        GetHAL().canvasSystemBar.pushImage(x, y, 32, 16, image_data_bat2);
-    } else if (_data.system_state.bat_state == 3) {
-        GetHAL().canvasSystemBar.pushImage(x, y, 32, 16, image_data_bat3);
-    } else if (_data.system_state.bat_state == 4) {
-        GetHAL().canvasSystemBar.pushImage(x, y, 32, 16, image_data_bat4);
-    }
+    if (GetHAL().keyboard.getFnState()) {
+	// FIXME: We also want to see samples, and the t-range. So not a bool, but a big enum/modulo thing.
+	static bool show_slope = false;
 
-    // Bat level
-    GetHAL().canvasSystemBar.setFont(&fonts::Font0);
-    GetHAL().canvasSystemBar.setTextColor((uint32_t)0x000000);
-    GetHAL().canvasSystemBar.drawCenterString(_data.system_state.bat_level.c_str(), 176,
-                                              GetHAL().canvasSystemBar.height() / 2 - 3);
+        GetHAL().canvasSystemBar.setFont(&fonts::Font0);
+        GetHAL().canvasSystemBar.setTextColor(THEME_COLOR_SYSTEM_BAR_TEXT);
+	std::string voltage_str;
+	if (show_slope) {
+	    float slope = GetHAL().powerProfile.getBatVoltageSlope_uVps();
+	    if (slope == 0.0f) {
+		voltage_str = "--mV/h";
+	    } else {
+	        voltage_str = fmt::format("{}mV/h", round(GetHAL().powerProfile.getBatVoltageSlope_uVps() * 3.6f));
+	    }
+	} else {
+	    voltage_str = fmt::format("{}mV", GetHAL().powerProfile.getBatVoltage());
+	}
+	GetHAL().canvasSystemBar.drawRightString(voltage_str.c_str(), x + 36,
+                                                 GetHAL().canvasSystemBar.height() / 2 - 3);
+	show_slope = !show_slope;
+    } else {
+        if (_data.system_state.bat_state == 1) {
+            GetHAL().canvasSystemBar.pushImage(x, y, 32, 16, image_data_bat1);
+        } else if (_data.system_state.bat_state == 2) {
+            GetHAL().canvasSystemBar.pushImage(x, y, 32, 16, image_data_bat2);
+        } else if (_data.system_state.bat_state == 3) {
+            GetHAL().canvasSystemBar.pushImage(x, y, 32, 16, image_data_bat3);
+        } else if (_data.system_state.bat_state == 4) {
+            GetHAL().canvasSystemBar.pushImage(x, y, 32, 16, image_data_bat4);
+        }
+
+        // Bat level
+        GetHAL().canvasSystemBar.setFont(&fonts::Font0);
+        GetHAL().canvasSystemBar.setTextColor((uint32_t)0x000000);
+        GetHAL().canvasSystemBar.drawCenterString(_data.system_state.bat_level.c_str(), 176,
+                                                  GetHAL().canvasSystemBar.height() / 2 - 3);
+    }
 
     // Push
     GetHAL().pushCanvasSystemBar();

@@ -49,6 +49,7 @@ private:
         uint32_t system_bar_update_period = 1000;
         uint32_t system_bar_update_count  = 0;
         uint32_t bat_update_time_count    = 0;
+        bool system_bar_last_fn_state     = false;
         SystemState_t system_state;
 
         // Keyboard bar

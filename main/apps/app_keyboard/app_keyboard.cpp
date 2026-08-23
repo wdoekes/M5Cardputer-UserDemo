@@ -15,6 +15,14 @@
 using namespace mooncake;
 using namespace smooth_ui_toolkit;
 
+namespace {
+// Reduce power usage after kIdleTimeoutMs of no key activity.
+// Screen fades out over kFadeDurationMs.
+constexpr uint32_t kIdleTimeoutMs     = 86'400'000; // temp 1d // 120'000;  // temp 2 min while characterising idle draw
+constexpr uint32_t kFadeDurationMs    = 5000;
+constexpr uint8_t kFallbackBrightness = 255;
+}  // namespace
+
 AppKeyboard::AppKeyboard()
 {
     setAppInfo().name     = "Keyboard";
@@ -58,6 +66,7 @@ void AppKeyboard::onRunning()
             // Initialize selected keyboard type
             if (keyboard_type == KeyboardSelectorMenu::KEYBOARD_TYPE_BLE) {
                 init_ble_keyboard();
+                start_idle_tracking();
             } else if (keyboard_type == KeyboardSelectorMenu::KEYBOARD_TYPE_USB) {
                 init_usb_keyboard();
             }
@@ -66,8 +75,13 @@ void AppKeyboard::onRunning()
             _is_keyboard_active = true;
         }
     } else if (_is_keyboard_active) {
-        // Update connection info periodically
-        update_connection_info();
+        if (_idle_logic_enabled) {
+            update_idle_state();
+        }
+        // Skip status redraws while the display is dimming or off -- waste of SPI traffic.
+        if (_idle_state == IDLE_STATE_AWAKE) {
+            update_connection_info();
+        }
     }
 
     // Close app when home button clicked
@@ -144,6 +158,80 @@ void AppKeyboard::render_keyboard_interface()
     GetHAL().pushCanvas();
 }
 
+void AppKeyboard::start_idle_tracking()
+{
+    _idle_logic_enabled = true;
+    _idle_state         = IDLE_STATE_AWAKE;
+    _last_input_time    = GetHAL().millis();
+
+    // Piggy-back on the keyboard's onKeyEvent signal. The HAL's BLE forwarder is
+    // already a separate slot; both fire independently, so the BLE keystroke
+    // forwarding is unaffected by us also listening here.
+    _wake_slot_id = GetHAL().keyboard.onKeyEvent.connect(
+        [this](const Keyboard::KeyEvent_t&) { on_user_input(); });
+}
+
+void AppKeyboard::on_user_input()
+{
+    _last_input_time = GetHAL().millis();
+    if (_idle_state != IDLE_STATE_AWAKE) {
+        wake_display();
+        // Re-render so the user sees current state on the freshly-lit panel.
+        render_keyboard_interface();
+        render_connection_status();
+    }
+}
+
+void AppKeyboard::wake_display()
+{
+    if (_idle_state == IDLE_STATE_ASLEEP) {
+        GetHAL().display.wakeup();
+    }
+    // wakeup() restores whatever brightness was set before sleep() -- which in
+    // our case is 0 because we faded down before sleeping. So restore explicitly.
+    GetHAL().display.setBrightness(_operating_brightness);
+    _idle_state = IDLE_STATE_AWAKE;
+}
+
+void AppKeyboard::update_idle_state()
+{
+    uint32_t now     = GetHAL().millis();
+    uint32_t elapsed = now - _last_input_time;
+
+    switch (_idle_state) {
+        case IDLE_STATE_AWAKE:
+            if (elapsed >= kIdleTimeoutMs) {
+                // Capture brightness now so wake can restore the same value
+                // (works even if a future settings UI changes the operating value).
+                _operating_brightness = GetHAL().display.getBrightness();
+                if (_operating_brightness == 0) {
+                    _operating_brightness = kFallbackBrightness;
+                }
+                _fade_start_time = now;
+                _idle_state      = IDLE_STATE_FADING;
+            }
+            break;
+
+        case IDLE_STATE_FADING: {
+            uint32_t fade_elapsed = now - _fade_start_time;
+            if (fade_elapsed >= kFadeDurationMs) {
+                GetHAL().display.setBrightness(0);
+                GetHAL().display.sleep();  // panel-side sleep on top of backlight=0
+                _idle_state = IDLE_STATE_ASLEEP;
+            } else {
+                uint32_t b = static_cast<uint32_t>(_operating_brightness) *
+                             (kFadeDurationMs - fade_elapsed) / kFadeDurationMs;
+                GetHAL().display.setBrightness(static_cast<uint8_t>(b));
+            }
+            break;
+        }
+
+        case IDLE_STATE_ASLEEP:
+            // Wait for a key event to wake us via on_user_input().
+            break;
+    }
+}
+
 void AppKeyboard::render_connection_status()
 {
     // Clear status area
@@ -156,13 +244,32 @@ void AppKeyboard::render_connection_status()
 
     if (ble_connected) {
         GetHAL().canvas.setTextColor(TFT_GREEN, THEME_COLOR_BG);
-        GetHAL().canvas.printf("BLE: Connected");
+        GetHAL().canvas.println("BLE: Connected");
     } else if (usb_connected) {
         GetHAL().canvas.setTextColor(TFT_GREEN, THEME_COLOR_BG);
-        GetHAL().canvas.printf("USB: Connected");
+        GetHAL().canvas.println("USB: Connected");
     } else {
         GetHAL().canvas.setTextColor(TFT_RED, THEME_COLOR_BG);
-        GetHAL().canvas.printf("Disconnected");
+        GetHAL().canvas.println("Disconnected");
+    }
+
+    auto canvas = GetHAL().canvas;
+    // Slope is dV/dt across Profile's ~60s ring of burst-sampled readings.
+    // Reference points (2025-11): around -7 uV/s with screen asleep,
+    // around -37 uV/s with screen at full brightness.
+    // KEEP? DROP? We'll want to down down the brightness...
+    auto history = GetHAL().powerProfile.getBatVoltageHistory();
+    auto hold = history.oldest();
+    auto hnew = history.latest();
+    int32_t diff_mv = (
+        static_cast<int32_t>(hnew.mv) - static_cast<int32_t>(hold.mv));
+    uint32_t diff_s = (hnew.time - hold.time) / 1000;
+    canvas.setTextColor(TFT_WHITE, THEME_COLOR_BG);
+    canvas.printf("mV  : %hu [%hu] %hu\n", GetHAL().powerProfile.getBatVoltage(),
+                  GetHAL().powerProfile.getBatVoltageInstant(), history.size());
+    canvas.printf("uV/s: %.1f [%ld/%lu]\n", GetHAL().powerProfile.getBatVoltageSlope_uVps(), diff_mv, diff_s);
+    if (history.size()) {
+        canvas.printf("dbg : %hu-%hu %lu-%lu\n", hold.mv, hnew.mv, hold.time / 1000, hnew.time / 1000);
     }
 
     GetHAL().pushCanvas();
