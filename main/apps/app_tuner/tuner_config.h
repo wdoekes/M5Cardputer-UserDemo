@@ -138,10 +138,8 @@ constexpr int HISTORY_ROWS     = 6;
 constexpr int HISTORY_CAPACITY = HISTORY_COLUMNS * HISTORY_ROWS;
 
 // A detected pitch within this many cents of centre counts as in tune and
-// gets no tuning arrow at all. Past it an arrow appears beside the note,
-// pointing down when the pitch is flat and up when it is sharp, growing
-// from its shortest at this threshold to its longest half a semitone out --
-// as far as a pitch can sit before it is named as its neighbour instead.
+// gets no sign at all. Past it a red "+" or "-" appears beside the note to
+// say which way it is off.
 constexpr float IN_TUNE_CENTS = 20.0f;
 
 // Oldest history entry is drawn at this fraction of full brightness, the

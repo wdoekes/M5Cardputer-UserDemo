@@ -110,20 +110,12 @@ constexpr BlackKey BLACK_KEYS[] = {
 constexpr int HELP_Y            = 16;
 constexpr int HELP_LINE_SPACING = 24;
 
-// Tuning arrow, drawn in the right margin beside the note. Fixed x and a
-// fixed tail y, so it neither shifts as the note name grows from two
-// characters to three nor jumps about as it appears and disappears.
-constexpr int ARROW_MARGIN_RIGHT = 14;  // of the centre line, from the edge
-constexpr int ARROW_BASE_Y       = 36;  // the tail; the tip grows away from it
-constexpr int ARROW_SHAFT_W      = 3;
-constexpr int ARROW_HEAD_W       = 9;
-constexpr int ARROW_HEAD_H       = 8;
-
-// Shortest arrow is drawn at IN_TUNE_CENTS, the longest half a semitone out.
-// The shortest still has to be longer than its own head to leave a shaft.
-constexpr int ARROW_MIN_LENGTH = 12;
-constexpr int ARROW_MAX_LENGTH = 32;
-constexpr uint16_t ARROW_COLOR = TFT_RED;
+// Sharp/flat sign, drawn beside the big note at the same size so it reads
+// as part of it. Fixed x rather than measured from the note's right edge,
+// so it does not shift when the name grows from "C4" to "C#4".
+constexpr int SIGN_TEXT_SIZE    = BIG_NOTE_TEXT_SIZE;
+constexpr int SIGN_MARGIN_RIGHT = 20;
+constexpr uint16_t SIGN_COLOR   = TFT_RED;
 
 /* -------------------------------------------------------------------------- */
 /*                               Drawing helpers                              */
@@ -236,32 +228,19 @@ void draw_note_readout(LGFX_Sprite& canvas, const Model& model, uint16_t color)
     print_centered(canvas, right_center_x(canvas), INFO_Y + INFO_LINE_H, FONT0_CHAR_W, line);
 }
 
-// How far the heard pitch sits from the note's centre: an arrow pointing
-// down when it is flat and up when it is sharp, longer the further out it
-// is. Nothing is drawn while the pitch is within IN_TUNE_CENTS, so no arrow
-// is the in-tune signal.
-void draw_tuning_arrow(LGFX_Sprite& canvas, float cents)
+// Which way the heard pitch is off: a red "+" when it is sharp and a "-"
+// when it is flat. Nothing is drawn while it is within IN_TUNE_CENTS, so no
+// sign is the in-tune signal.
+void draw_tuning_sign(LGFX_Sprite& canvas, float cents)
 {
-    float magnitude = std::fabs(cents);
-    if (magnitude <= IN_TUNE_CENTS) {
+    if (std::fabs(cents) <= IN_TUNE_CENTS) {
         return;
     }
 
-    // Remap (IN_TUNE_CENTS, half a semitone] onto the drawable lengths.
-    float position =
-        std::clamp((magnitude - IN_TUNE_CENTS) / (note::CENTS_PER_SEMITONE_HALF - IN_TUNE_CENTS), 0.0f, 1.0f);
-    int length = ARROW_MIN_LENGTH + (int)((ARROW_MAX_LENGTH - ARROW_MIN_LENGTH) * position + 0.5f);
-
-    // Sharp points up, which is towards smaller y.
-    int center_x  = canvas.width() - ARROW_MARGIN_RIGHT;
-    int direction = (cents > 0.0f) ? -1 : 1;
-    int tip_y     = ARROW_BASE_Y + direction * length;
-    int neck_y    = tip_y - direction * ARROW_HEAD_H;
-
-    canvas.fillTriangle(center_x, tip_y, center_x - ARROW_HEAD_W / 2, neck_y, center_x + ARROW_HEAD_W / 2, neck_y,
-                        ARROW_COLOR);
-    canvas.fillRect(center_x - ARROW_SHAFT_W / 2, std::min(ARROW_BASE_Y, neck_y), ARROW_SHAFT_W,
-                    std::abs(neck_y - ARROW_BASE_Y), ARROW_COLOR);
+    canvas.setTextSize(SIGN_TEXT_SIZE);
+    canvas.setTextColor(SIGN_COLOR, THEME_COLOR_BG);
+    canvas.setCursor(canvas.width() - SIGN_MARGIN_RIGHT, BIG_NOTE_Y);
+    canvas.print(cents > 0.0f ? "+" : "-");
 }
 
 // One octave of keys, with every key of the shown note's pitch class lit --
@@ -313,7 +292,7 @@ void render(const Model& model)
         draw_note_readout(canvas, model, color);
         if (!model.played) {
             // Only a heard pitch can be off centre; a played one is exact.
-            draw_tuning_arrow(canvas, note::cents_off(model.note, model.frequency_hz));
+            draw_tuning_sign(canvas, note::cents_off(model.note, model.frequency_hz));
         }
     }
 
