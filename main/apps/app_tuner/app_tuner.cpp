@@ -206,8 +206,7 @@ void AppTuner::update_audio(uint32_t now)
     switch (_audio_state) {
         case AudioState::Listening:
             if (_request.pending()) {
-                // First note of a run: swap the peripheral over. The switch
-                // pops, but the tone starting masks it.
+                // First note of a run: swap the peripheral over.
                 leave_listening();
                 GetHAL().speaker.begin();
                 start_tone(now);
@@ -216,11 +215,9 @@ void AppTuner::update_audio(uint32_t now)
             }
             break;
 
-        case AudioState::Playing: {
-            uint32_t held_ms = now - _play_started_ms;
-            // MIN_PLAY_MS keeps a quick tap audible; MAX_PLAY_MS catches a
-            // release event that never arrived.
-            if ((_release_pending && held_ms >= MIN_PLAY_MS) || held_ms > MAX_PLAY_MS) {
+        case AudioState::Playing:
+            // MAX_PLAY_MS catches a release event that never arrived.
+            if (_release_pending || (now - _play_started_ms) > MAX_PLAY_MS) {
                 // Silence the tone but leave the speaker up, so a follow-up
                 // note within COOLDOWN_MS needs no peripheral switch.
                 GetHAL().speaker.stop();
@@ -230,7 +227,6 @@ void AppTuner::update_audio(uint32_t now)
                 _audio_state         = AudioState::Cooldown;
             }
             break;
-        }
 
         case AudioState::Cooldown:
             if (_request.pending()) {

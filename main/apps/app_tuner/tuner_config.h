@@ -29,17 +29,15 @@ namespace tuner {
 // dictated by the keyboard, not configured -- see tuner::KEY_ROWS.
 constexpr int PLAY_LOWEST_OCTAVE = 4;
 
-// A tone plays for as long as its key is held, bounded on both ends.
-// MIN keeps a quick tap audible and avoids the click that a near-instant
-// tone()/stop() pair produces on the I2S amp; MAX is a safety net for a key
-// whose release event never arrives.
-constexpr uint32_t MIN_PLAY_MS = 150;
+// A tone plays for as long as its key is held. This is only a safety net
+// for a key whose release event never arrives.
 constexpr uint32_t MAX_PLAY_MS = 5000;
 
 // How long the speaker stays open and silent after a note ends. A follow-up
-// note within this window skips the I2S teardown entirely, which is what
-// makes playing a run of notes sound continuous instead of popping between
-// each one. Raising it delays the return to listening by the same amount.
+// note within this window reuses the speaker instead of tearing it down and
+// bringing the mic back up, so a run of notes is not paced by two peripheral
+// switches per note. Raising it delays the return to listening by the same
+// amount.
 constexpr uint32_t COOLDOWN_MS = 250;
 
 // The speaker gets harsh as the pitch climbs, so the drive level tapers off
