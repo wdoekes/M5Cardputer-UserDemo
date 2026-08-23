@@ -265,6 +265,18 @@ void AppTuner::update_audio(uint32_t now)
         case AudioState::Listening:
             if (_request.pending()) {
                 // First note of a run: swap the peripheral over.
+                //
+                // This begin() thumps, and it is where the click that
+                // survived the synthesis is heard: at the start of the first
+                // note after a spell of listening, never between the notes
+                // of a run. It is not the waveform -- a note starts from
+                // silence at its attack -- so what is left is the amplifier
+                // coming back up and settling its output into a speaker that
+                // is already connected.
+                //
+                // There is no fix from this side. The mic and the speaker
+                // share the I2S peripheral, so listening means the speaker
+                // goes down, and the next note means it comes back up.
                 leave_listening();
                 GetHAL().speaker.begin();
                 start_tone(now);
@@ -293,12 +305,11 @@ void AppTuner::update_audio(uint32_t now)
                 // Nothing followed: hand the I2S back to the mic. Whatever
                 // the detector was tracking heard our own tone, so drop it.
                 //
-                // This end() thumps. It is the amplifier powering down, not
-                // the waveform -- the last sample of a note is already zero
-                // -- and there is no fix from this side: the mic and the
-                // speaker share the I2S peripheral, so listening means
-                // tearing the speaker down. What the cooldown buys is that a
-                // run of notes only pays for it once, at the end.
+                // Waiting COOLDOWN_MS before coming down here is what keeps
+                // a run of notes from paying for the switch between every
+                // note -- and, with it, for the thump noted at the begin()
+                // above, which the next note after this would otherwise
+                // bring back.
                 GetHAL().speaker.end();
                 forget_candidate();
                 enter_listening();
