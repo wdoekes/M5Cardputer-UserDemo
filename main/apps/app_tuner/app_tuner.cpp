@@ -129,6 +129,7 @@ void AppTuner::reset_state()
     _history.clear();
     _shown      = Shown();
     _accidental = note::Accidental::Sharp;
+    _tap_tempo.clear();
 
     forget_candidate();
 
@@ -398,6 +399,13 @@ void AppTuner::handle_key_event(const Keyboard::KeyEvent_t& event)
         return;
     }
 
+    // SPACE is not a piano key, so it is free to tap out a tempo. The press
+    // is what counts; the matching release says nothing about the beat.
+    if (event.keyCode == KEY_SPACE) {
+        _tap_tempo.tap(GetHAL().millis());
+        return;
+    }
+
     // Press. Only Listening (cold start) and Cooldown (speaker still warm)
     // take one; while a note is Sounding an earlier key still owns the
     // speaker.
@@ -440,6 +448,7 @@ void AppTuner::render()
     model.played       = _shown.played;
     model.history      = &_history;
     model.accidental   = _accidental;
+    model.bpm          = _tap_tempo.bpm();
 
     view::render(model);
 }

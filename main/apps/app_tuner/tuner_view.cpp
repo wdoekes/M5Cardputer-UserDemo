@@ -224,7 +224,27 @@ void draw_note_readout(LGFX_Sprite& canvas, const Model& model, uint16_t color)
     char line[16];
     std::snprintf(line, sizeof(line), "%.1f Hz", model.frequency_hz);
     print_centered(canvas, right_center_x(canvas), INFO_Y, FONT0_CHAR_W, line);
-    std::snprintf(line, sizeof(line), "conf %.2f", model.confidence);
+}
+
+// The canvas is 109 px tall and the rows below the big note are already
+// spoken for, so the tapped tempo shares a line with the detector's
+// confidence. Confidence is a diagnostic; a tempo is something the user
+// just asked for, so it takes the slot whenever it has a value -- including
+// before any note has been played or heard, which is when someone tapping
+// out a beat would be looking at it.
+void draw_second_info_line(LGFX_Sprite& canvas, const Model& model)
+{
+    char line[16];
+    if (model.bpm > 0.0f) {
+        std::snprintf(line, sizeof(line), "%.1f bpm", model.bpm);
+    } else if (model.note != note::NONE) {
+        std::snprintf(line, sizeof(line), "conf %.2f", model.confidence);
+    } else {
+        return;
+    }
+
+    canvas.setTextSize(1);
+    canvas.setTextColor(TFT_DARKGREY, THEME_COLOR_BG);
     print_centered(canvas, right_center_x(canvas), INFO_Y + INFO_LINE_H, FONT0_CHAR_W, line);
 }
 
@@ -295,6 +315,8 @@ void render(const Model& model)
             draw_tuning_sign(canvas, note::cents_off(model.note, model.frequency_hz));
         }
     }
+
+    draw_second_info_line(canvas, model);
 
     draw_piano(canvas, model.note, color);
 

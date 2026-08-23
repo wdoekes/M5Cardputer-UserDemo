@@ -7,6 +7,7 @@
 #include "note.h"
 #include "note_history.h"
 #include "pitch_detector.h"
+#include "tap_tempo.h"
 #include "tone_generator.h"
 #include "tuner_config.h"
 
@@ -99,6 +100,9 @@ private:
     // How black keys are spelled on screen. Aa and Fn pick it, the same way
     // they pick which accidental a pressed natural plays.
     note::Accidental _accidental = note::Accidental::Sharp;
+
+    // Tempo tapped out on SPACE, which is not a piano key.
+    tuner::TapTempo _tap_tempo;
 
     // Note being watched for stability, and how long it has held up.
     int _candidate_note   = note::NONE;

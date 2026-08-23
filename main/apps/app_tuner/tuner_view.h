@@ -37,6 +37,11 @@ struct Model {
     // How the black keys are spelled, everywhere on screen at once. A panel
     // mixing both spellings would read as an error rather than a choice.
     note::Accidental accidental = note::Accidental::Sharp;
+
+    // Tapped tempo, or 0 when nothing has been tapped. It takes the second
+    // info line while it has a value; see tuner_view.cpp for why it shares
+    // that slot with the detector's confidence.
+    float bpm = 0.0f;
 };
 
 // Draws one frame and pushes it to the display.

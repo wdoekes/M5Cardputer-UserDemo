@@ -127,6 +127,24 @@ constexpr float DETECT_MIN_CONFIDENCE = 0.9f;
 // note on screen is not cleared by silence; only a new pitch replaces it.
 constexpr int DETECT_SILENCE_FRAMES = 5;
 
+/* ----------------------------- Tap tempo --------------------------------- */
+
+// Tapping SPACE reads out a tempo. Only the press time counts: how long the
+// key is held says nothing about the beat.
+//
+// The window of the last TAP_TEMPO_MAX_TAPS presses gives one fewer
+// interval than that. The fastest and the slowest are dropped before
+// averaging so a single fumbled tap cannot drag the reading, which is only
+// worth doing once there are enough intervals to leave something in the
+// middle.
+constexpr int TAP_TEMPO_MAX_TAPS = 10;
+constexpr int TAP_TEMPO_OUTLIERS = 2;
+
+// A gap longer than this ends the run, so the next tap starts a new one
+// instead of averaging across a pause. 2 s is 30 bpm, about the slowest
+// anyone taps a beat.
+constexpr uint32_t TAP_TEMPO_TIMEOUT_MS = 2000;
+
 /* ------------------------------ Display ---------------------------------- */
 
 // Recent notes shown in the history panel, laid out as a column-major grid:
