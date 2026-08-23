@@ -28,7 +28,7 @@ struct Model {
     float confidence   = 0.0f;
 
     // True when `note` came from a key press rather than the microphone.
-    // Played notes are exact, so they skip the in-tune colouring.
+    // Played notes are exact, so they get no tuning arrow.
     bool played = false;
 
     // Recent notes for the side panel. Never null.

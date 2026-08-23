@@ -33,19 +33,6 @@ constexpr int R5_MAX  = (1 << R5_BITS) - 1;
 constexpr int G6_MAX  = (1 << G6_BITS) - 1;
 constexpr int B5_MAX  = (1 << B5_BITS) - 1;
 
-struct Rgb888 {
-    uint8_t r;
-    uint8_t g;
-    uint8_t b;
-};
-
-// Packs 8-bit-per-channel colour into RGB565, the same way the TFT_* macros do.
-constexpr uint16_t to_rgb565(const Rgb888& c)
-{
-    return (uint16_t)(((c.r >> (8 - R5_BITS)) << (G6_BITS + B5_BITS)) | ((c.g >> (8 - G6_BITS)) << B5_BITS) |
-                      (c.b >> (8 - B5_BITS)));
-}
-
 // Scales every channel of an RGB565 colour by `intensity` in [0, 1].
 uint16_t dim_rgb565(uint16_t color, float intensity)
 {
@@ -58,52 +45,11 @@ uint16_t dim_rgb565(uint16_t color, float intensity)
     return (uint16_t)((r << (G6_BITS + B5_BITS)) | (g << B5_BITS) | b);
 }
 
-// Colour ramps for a detected pitch, walked outward from centre. The first
-// stop is the in-tune colour and the last is reached half a semitone out,
-// which is as far as a pitch can stray before it is named as its neighbour.
-// Sharp warms towards red, flat cools towards purple, so the direction to
-// correct in is readable at a glance without reading the cents.
-constexpr Rgb888 SHARP_RAMP[] = {
-    {0, 255, 255},  // cyan
-    {255, 255, 0},  // yellow
-    {255, 0, 0},    // red
-};
-constexpr Rgb888 FLAT_RAMP[] = {
-    {0, 255, 255},  // cyan
-    {0, 0, 255},    // blue
-    {128, 0, 255},  // purple
-};
-
-template <size_t N>
-uint16_t sample_ramp(const Rgb888 (&stops)[N], float position)
-{
-    float scaled       = std::clamp(position, 0.0f, 1.0f) * (N - 1);
-    size_t index       = std::min((size_t)scaled, N - 2);
-    float blend        = scaled - index;
-    const Rgb888& from = stops[index];
-    const Rgb888& to   = stops[index + 1];
-    return to_rgb565({(uint8_t)(from.r + (to.r - from.r) * blend), (uint8_t)(from.g + (to.g - from.g) * blend),
-                      (uint8_t)(from.b + (to.b - from.b) * blend)});
-}
-
-// Colour for a heard pitch: plain cyan while it is within IN_TUNE_CENTS of
-// the note's centre, then along the sharp or flat ramp as it drifts out.
-uint16_t in_tune_color(int midi, float frequency_hz)
-{
-    float cents     = note::cents_off(midi, frequency_hz);
-    float magnitude = std::fabs(cents);
-    if (magnitude <= IN_TUNE_CENTS) {
-        return TFT_CYAN;
-    }
-
-    // Remap (IN_TUNE_CENTS, half a semitone] onto (0, 1].
-    float position = (magnitude - IN_TUNE_CENTS) / (note::CENTS_PER_SEMITONE_HALF - IN_TUNE_CENTS);
-    return cents > 0.0f ? sample_ramp(SHARP_RAMP, position) : sample_ramp(FLAT_RAMP, position);
-}
-
-// Notes struck on the keyboard are exact by definition, so they are shown in
-// a colour of their own rather than on the in-tune ramp.
-constexpr uint16_t PLAYED_COLOR = TFT_GREEN;
+// Notes struck on the keyboard are exact by definition, so they are told
+// apart from heard ones by colour. How far a heard pitch sits from centre is
+// the tuning arrow's job, not the colour's.
+constexpr uint16_t PLAYED_COLOR   = TFT_GREEN;
+constexpr uint16_t DETECTED_COLOR = TFT_CYAN;
 
 /* -------------------------------------------------------------------------- */
 /*                                   Layout                                   */
@@ -164,6 +110,21 @@ constexpr BlackKey BLACK_KEYS[] = {
 constexpr int HELP_Y            = 16;
 constexpr int HELP_LINE_SPACING = 24;
 
+// Tuning arrow, drawn in the right margin beside the note. Fixed x and a
+// fixed tail y, so it neither shifts as the note name grows from two
+// characters to three nor jumps about as it appears and disappears.
+constexpr int ARROW_MARGIN_RIGHT = 14;  // of the centre line, from the edge
+constexpr int ARROW_BASE_Y       = 36;  // the tail; the tip grows away from it
+constexpr int ARROW_SHAFT_W      = 3;
+constexpr int ARROW_HEAD_W       = 9;
+constexpr int ARROW_HEAD_H       = 8;
+
+// Shortest arrow is drawn at IN_TUNE_CENTS, the longest half a semitone out.
+// The shortest still has to be longer than its own head to leave a shaft.
+constexpr int ARROW_MIN_LENGTH = 12;
+constexpr int ARROW_MAX_LENGTH = 32;
+constexpr uint16_t ARROW_COLOR = TFT_RED;
+
 /* -------------------------------------------------------------------------- */
 /*                               Drawing helpers                              */
 /* -------------------------------------------------------------------------- */
@@ -199,7 +160,7 @@ void draw_history(LGFX_Sprite& canvas, const NoteHistory& history)
         float age_fraction = (history.size() > 1) ? (float)i / (history.size() - 1) : 1.0f;
         float intensity    = HISTORY_FADE_FLOOR + (1.0f - HISTORY_FADE_FLOOR) * age_fraction;
 
-        uint16_t color = (entry.source == NoteHistory::Source::Played) ? PLAYED_COLOR : (uint16_t)TFT_CYAN;
+        uint16_t color = (entry.source == NoteHistory::Source::Played) ? PLAYED_COLOR : DETECTED_COLOR;
         canvas.setTextColor(dim_rgb565(color, intensity), THEME_COLOR_BG);
         canvas.setCursor((i / HISTORY_ROWS) * HISTORY_ENTRY_W, (i % HISTORY_ROWS) * HISTORY_ROW_H);
         canvas.print(cell);
@@ -275,6 +236,34 @@ void draw_note_readout(LGFX_Sprite& canvas, const Model& model, uint16_t color)
     print_centered(canvas, right_center_x(canvas), INFO_Y + INFO_LINE_H, FONT0_CHAR_W, line);
 }
 
+// How far the heard pitch sits from the note's centre: an arrow pointing
+// down when it is flat and up when it is sharp, longer the further out it
+// is. Nothing is drawn while the pitch is within IN_TUNE_CENTS, so no arrow
+// is the in-tune signal.
+void draw_tuning_arrow(LGFX_Sprite& canvas, float cents)
+{
+    float magnitude = std::fabs(cents);
+    if (magnitude <= IN_TUNE_CENTS) {
+        return;
+    }
+
+    // Remap (IN_TUNE_CENTS, half a semitone] onto the drawable lengths.
+    float position =
+        std::clamp((magnitude - IN_TUNE_CENTS) / (note::CENTS_PER_SEMITONE_HALF - IN_TUNE_CENTS), 0.0f, 1.0f);
+    int length = ARROW_MIN_LENGTH + (int)((ARROW_MAX_LENGTH - ARROW_MIN_LENGTH) * position + 0.5f);
+
+    // Sharp points up, which is towards smaller y.
+    int center_x  = canvas.width() - ARROW_MARGIN_RIGHT;
+    int direction = (cents > 0.0f) ? -1 : 1;
+    int tip_y     = ARROW_BASE_Y + direction * length;
+    int neck_y    = tip_y - direction * ARROW_HEAD_H;
+
+    canvas.fillTriangle(center_x, tip_y, center_x - ARROW_HEAD_W / 2, neck_y, center_x + ARROW_HEAD_W / 2, neck_y,
+                        ARROW_COLOR);
+    canvas.fillRect(center_x - ARROW_SHAFT_W / 2, std::min(ARROW_BASE_Y, neck_y), ARROW_SHAFT_W,
+                    std::abs(neck_y - ARROW_BASE_Y), ARROW_COLOR);
+}
+
 // One octave of keys, with every key of the shown note's pitch class lit --
 // octave is deliberately ignored, so any C from C2 up lights the same key.
 void draw_piano(LGFX_Sprite& canvas, int midi, uint16_t color)
@@ -316,17 +305,19 @@ void render(const Model& model)
         draw_history(canvas, *model.history);
     }
 
+    uint16_t color = model.played ? PLAYED_COLOR : DETECTED_COLOR;
+
     if (model.note == note::NONE) {
         draw_listening_help(canvas);
     } else {
-        uint16_t color = model.played ? PLAYED_COLOR : in_tune_color(model.note, model.frequency_hz);
         draw_note_readout(canvas, model, color);
+        if (!model.played) {
+            // Only a heard pitch can be off centre; a played one is exact.
+            draw_tuning_arrow(canvas, note::cents_off(model.note, model.frequency_hz));
+        }
     }
 
-    // The piano keeps the plain played/detected colour: it points at a key,
-    // it is not a tuning readout, and the in-tune ramp is hard to read on a
-    // 5 px wide black key.
-    draw_piano(canvas, model.note, model.played ? PLAYED_COLOR : (uint16_t)TFT_CYAN);
+    draw_piano(canvas, model.note, color);
 
     GetHAL().pushCanvas();
 }

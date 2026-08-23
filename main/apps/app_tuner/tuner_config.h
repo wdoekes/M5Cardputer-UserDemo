@@ -104,9 +104,10 @@ constexpr int HISTORY_ROWS     = 6;
 constexpr int HISTORY_CAPACITY = HISTORY_COLUMNS * HISTORY_ROWS;
 
 // A detected pitch within this many cents of centre counts as in tune and
-// is drawn plain cyan; past it the colour ramps towards red (sharp) or
-// purple (flat), reaching the far end half a semitone out, which is as far
-// as a pitch can sit before it is named as its neighbour instead.
+// gets no tuning arrow at all. Past it an arrow appears beside the note,
+// pointing down when the pitch is flat and up when it is sharp, growing
+// from its shortest at this threshold to its longest half a semitone out --
+// as far as a pitch can sit before it is named as its neighbour instead.
 constexpr float IN_TUNE_CENTS = 20.0f;
 
 // Oldest history entry is drawn at this fraction of full brightness, the

@@ -26,8 +26,8 @@
  * sounds for as long as its key is held.
  *
  * Between key presses the app listens on the microphone, names the pitch it
- * hears and colours it by how far off centre it is. Played and heard notes
- * both accumulate in the history panel.
+ * hears and shows how far off centre it is as an arrow beside the note.
+ * Played and heard notes both accumulate in the history panel.
  */
 class AppTuner : public mooncake::AppAbility {
 public:
