@@ -33,17 +33,17 @@ constexpr int PLAY_LOWEST_OCTAVE = 4;
 // for a key whose release event never arrives.
 constexpr uint32_t MAX_PLAY_MS = 5000;
 
-// Amplitude envelope of a played note: the tone ramps up over FADE_IN_MS
-// when it starts and back down over FADE_OUT_MS when its key is released,
-// so neither edge is the step discontinuity that tone()/stop() would leave
-// on their own.
+// A played note is synthesised rather than handed to Speaker::tone(), so
+// its shape is described here in full.
 //
-// The ramp is stepped once per rendered frame, so these have to span
-// several frames to be a ramp at all -- a two-millisecond fade would land
-// on a single step and click exactly as before. A note is also never
-// shorter than its own fade-out, however briefly its key was tapped.
-constexpr uint32_t FADE_IN_MS  = 40;
-constexpr uint32_t FADE_OUT_MS = 60;
+// The envelope runs attack -> decay -> hold -> release. The attack can be
+// short because it is applied per sample rather than once per rendered
+// frame; the hold sits below the peak deliberately, so a note has some
+// shape instead of being a flat tone.
+constexpr uint32_t TONE_ATTACK_MS  = 6;
+constexpr uint32_t TONE_DECAY_MS   = 150;
+constexpr uint32_t TONE_RELEASE_MS = 50;
+constexpr float TONE_HOLD_LEVEL    = 0.55f;
 
 // How long the speaker stays open and silent after a note ends. A follow-up
 // note within this window reuses the speaker instead of tearing it down and
@@ -52,13 +52,47 @@ constexpr uint32_t FADE_OUT_MS = 60;
 // amount.
 constexpr uint32_t COOLDOWN_MS = 250;
 
-// The speaker gets harsh as the pitch climbs, so the drive level tapers off
-// above middle C: PLAY_VOLUME_BASE up to PLAY_VOLUME_FLAT_UP_TO, then down
-// by PLAY_VOLUME_FALLOFF_PER_SEMITONE per semitone until PLAY_VOLUME_MIN.
-constexpr int PLAY_VOLUME_BASE                 = 200;
-constexpr int PLAY_VOLUME_MIN                  = 60;
-constexpr int PLAY_VOLUME_FALLOFF_PER_SEMITONE = 4;
-constexpr int PLAY_VOLUME_FLAT_UP_TO           = note::c_of_octave(4);
+// Peak sample amplitude, as a fraction of 16-bit full scale. Full scale
+// clips audibly on this speaker. Together with TONE_GAIN_DB_PER_OCTAVE this
+// is the pair of knobs for how loud the app is.
+constexpr float TONE_PEAK_AMPLITUDE = 0.7f;
+
+// Loudness has to fall as the pitch climbs: the ear is most sensitive
+// around 1-4 kHz and a small speaker reproduces the low end poorly, so
+// equal amplitude does not sound equally loud. Decibels per octave is the
+// natural unit for a logarithmic scale; TONE_GAIN_REF_NOTE plays at full
+// gain and everything above it is quieter, down to the floor.
+//
+// This wants tuning by ear: the taper it replaces worked out to about
+// -5.7 dB/octave and the high notes still came out too loud.
+constexpr int TONE_GAIN_REF_NOTE        = note::c_of_octave(4);
+constexpr float TONE_GAIN_DB_PER_OCTAVE = -9.0f;
+constexpr float TONE_GAIN_MIN           = 0.08f;
+
+// Samples per block handed to the speaker, and how many blocks rotate.
+// Speaker_Class holds two wav slots per channel, one playing and one
+// reserved, so two blocks are in flight while the third is being generated
+// -- the mixer is never reading a buffer we are writing.
+//
+// Block size trades release latency against underrun margin. A key release
+// cannot cancel audio already handed over, so a note rings on for up to two
+// blocks (about 43 ms at 48 kHz) before its release ramp starts, which is
+// inaudible as a delay. An underrun, on the other hand, is a click.
+constexpr size_t TONE_BLOCK_SAMPLES = 1024;
+constexpr size_t TONE_BLOCK_COUNT   = 3;
+
+// Wav slots Speaker_Class keeps per channel, which is what isPlaying()
+// counts. Feeding it only while it reports fewer than this keeps playRaw()
+// from blocking the frame waiting on the mixer.
+constexpr size_t SPEAKER_SLOTS_PER_CHANNEL = 2;
+
+// Mixer channel the played note owns. Keyboard SFX are off while the app is
+// open, so nothing else is mixing.
+constexpr int TONE_CHANNEL = 0;
+
+// Master volume while the app owns the speaker. Everything else about the
+// level is baked into the samples, so this stays out of the way.
+constexpr uint8_t TONE_MASTER_VOLUME = 255;
 
 /* ------------------------------ Listening -------------------------------- */
 

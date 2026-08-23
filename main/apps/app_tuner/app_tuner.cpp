@@ -26,10 +26,6 @@ constexpr int SHARP_SEMITONES   = +1;
 constexpr int FLAT_SEMITONES    = -1;
 constexpr int NATURAL_SEMITONES = 0;
 
-// Speaker::tone() wants a duration up front and has no "hold until stopped",
-// so ask for the longest one it can express; the state machine stops it.
-constexpr uint32_t TONE_HOLD_FOREVER_MS = UINT32_MAX;
-
 // Aa (Shift) sharpens the pressed natural and Fn flattens it; Shift wins if
 // both are down. Shift-means-up is the conventional reading, and Fn sits in
 // the bottom-left corner, the end of a piano where the low notes are.
@@ -45,24 +41,15 @@ int accidental_semitones()
     return NATURAL_SEMITONES;
 }
 
-// How far along a ramp of `duration_ms` starting at `since_ms` we are, as a
-// fraction in [0, 1].
-float ramp_progress(uint32_t now, uint32_t since_ms, uint32_t duration_ms)
-{
-    uint32_t elapsed = now - since_ms;
-    if (duration_ms == 0 || elapsed >= duration_ms) {
-        return 1.0f;
-    }
-    return (float)elapsed / duration_ms;
-}
+constexpr float DB_PER_AMPLITUDE_DECADE = 20.0f;
 
-// The speaker turns harsh as the pitch climbs, so taper the drive level off
-// above middle C rather than playing every note at the same level.
-uint8_t volume_for_note(int midi)
+// Amplitude scale for a note, falling by TONE_GAIN_DB_PER_OCTAVE for every
+// octave above the reference so that high notes do not drown out low ones.
+float gain_for_note(int midi)
 {
-    int above_flat_range = std::max(0, midi - PLAY_VOLUME_FLAT_UP_TO);
-    int volume           = PLAY_VOLUME_BASE - above_flat_range * PLAY_VOLUME_FALLOFF_PER_SEMITONE;
-    return (uint8_t)std::max(volume, PLAY_VOLUME_MIN);
+    float octaves_above = (float)(midi - TONE_GAIN_REF_NOTE) / note::SEMITONES_PER_OCTAVE;
+    float decibels      = TONE_GAIN_DB_PER_OCTAVE * octaves_above;
+    return std::clamp(std::pow(10.0f, decibels / DB_PER_AMPLITUDE_DECADE), TONE_GAIN_MIN, 1.0f);
 }
 
 }  // namespace
@@ -92,7 +79,7 @@ void AppTuner::onOpen()
     // both for the speaker and for the microphone.
     audio::set_keyboard_sfx_enable(false);
 
-    allocate_frames();
+    allocate_buffers();
 
     _key_event_slot_id = GetHAL().keyboard.onKeyEvent.connect(
         [this](const Keyboard::KeyEvent_t& event) { handle_key_event(event); });
@@ -132,7 +119,7 @@ void AppTuner::onClose()
     GetHAL().speaker.begin();
     GetHAL().speaker.setVolume(audio::DEFAULT_VOLUME);
 
-    free_frames();
+    free_buffers();
 
     audio::set_keyboard_sfx_enable(true);
 }
@@ -151,13 +138,12 @@ void AppTuner::reset_state()
     _cooldown_started_ms = 0;
     _audio_state         = AudioState::Listening;
 
-    _peak_volume        = 0;
-    _envelope           = 0.0f;
-    _release_envelope   = 0.0f;
-    _release_started_ms = 0;
+    _generator           = ToneGenerator();
+    _tone_block_index    = 0;
+    _tone_sample_rate_hz = 0;
 }
 
-void AppTuner::allocate_frames()
+void AppTuner::allocate_buffers()
 {
     for (size_t i = 0; i < MIC_FRAME_COUNT; ++i) {
         _frames[i] = new int16_t[MIC_FRAME_SAMPLES]();
@@ -165,13 +151,22 @@ void AppTuner::allocate_frames()
     _record_index = 0;
     _detect_index = 0;
     _mic_primed   = false;
+
+    for (size_t i = 0; i < TONE_BLOCK_COUNT; ++i) {
+        _tone_blocks[i] = new int16_t[TONE_BLOCK_SAMPLES]();
+    }
+    _tone_block_index = 0;
 }
 
-void AppTuner::free_frames()
+void AppTuner::free_buffers()
 {
     for (size_t i = 0; i < MIC_FRAME_COUNT; ++i) {
         delete[] _frames[i];
         _frames[i] = nullptr;
+    }
+    for (size_t i = 0; i < TONE_BLOCK_COUNT; ++i) {
+        delete[] _tone_blocks[i];
+        _tone_blocks[i] = nullptr;
     }
 }
 
@@ -209,35 +204,39 @@ void AppTuner::leave_listening()
 
 void AppTuner::start_tone(uint32_t now)
 {
-    _peak_volume = volume_for_note(_request.note);
+    // How loud the note is lives in the samples, so the master volume is
+    // pinned out of the way. Set here rather than at the peripheral switch,
+    // so a note retriggered out of Cooldown gets the same treatment.
+    GetHAL().speaker.setVolume(TONE_MASTER_VOLUME);
 
-    // Start silent; the attack ramp in update_audio() brings it up from
-    // here, so the tone does not begin on a step edge.
-    set_envelope(0.0f);
-    GetHAL().speaker.tone(note::to_frequency(_request.note), TONE_HOLD_FOREVER_MS);
+    // Generate at the speaker's own rate so the mixer copies the samples
+    // straight through instead of resampling them.
+    _tone_sample_rate_hz = GetHAL().speaker.config().sample_rate;
+    _generator.start(note::to_frequency(_request.note), gain_for_note(_request.note), _tone_sample_rate_hz);
 
     _sounding_key_code = _request.key_code;
     _play_started_ms   = now;
     _request.clear();
-    _audio_state = AudioState::Playing;
+    _audio_state = AudioState::Sounding;
+
+    // Hand over the first blocks now rather than a frame later, so the note
+    // starts on the key press instead of after it.
+    feed_speaker();
 }
 
-void AppTuner::set_envelope(float level)
+void AppTuner::feed_speaker()
 {
-    _envelope = level;
-    // Speaker_Class squares the master volume before mixing, so driving the
-    // byte linearly already comes out as a curve rather than a straight line.
-    GetHAL().speaker.setVolume((uint8_t)std::lround(_peak_volume * level));
-}
-
-void AppTuner::begin_release(uint32_t now)
-{
-    // Fade from wherever the attack actually got to, so a key tapped and
-    // let go mid-attack does not jump to full volume on its way out.
-    _release_envelope   = _envelope;
-    _release_started_ms = now;
-    _release_pending    = false;
-    _audio_state        = AudioState::Releasing;
+    // playRaw() blocks until the reserved slot frees, so only call it while
+    // one is free; otherwise a frame would stall waiting on the mixer.
+    while (GetHAL().speaker.isPlaying(TONE_CHANNEL) < SPEAKER_SLOTS_PER_CHANNEL) {
+        int16_t* block = _tone_blocks[_tone_block_index];
+        size_t count   = _generator.fill(block, TONE_BLOCK_SAMPLES);
+        if (count == 0) {
+            return;
+        }
+        _tone_block_index = (_tone_block_index + 1) % TONE_BLOCK_COUNT;
+        GetHAL().speaker.playRaw(block, count, _tone_sample_rate_hz, false, 1, TONE_CHANNEL, false);
+    }
 }
 
 void AppTuner::update_audio(uint32_t now)
@@ -254,27 +253,23 @@ void AppTuner::update_audio(uint32_t now)
             }
             break;
 
-        case AudioState::Playing:
-            set_envelope(ramp_progress(now, _play_started_ms, FADE_IN_MS));
+        case AudioState::Sounding:
             // MAX_PLAY_MS catches a release event that never arrived.
             if (_release_pending || (now - _play_started_ms) > MAX_PLAY_MS) {
-                begin_release(now);
+                _release_pending = false;
+                _generator.release();
             }
-            break;
-
-        case AudioState::Releasing: {
-            float remaining = 1.0f - ramp_progress(now, _release_started_ms, FADE_OUT_MS);
-            set_envelope(_release_envelope * remaining);
-            if (remaining <= 0.0f) {
-                // Faded out: silence the tone but leave the speaker up, so a
-                // follow-up note within COOLDOWN_MS needs no peripheral switch.
-                GetHAL().speaker.stop();
+            feed_speaker();
+            // The generator runs out first; the speaker keeps going until
+            // the blocks already handed over have played.
+            if (_generator.finished() && GetHAL().speaker.isPlaying(TONE_CHANNEL) == 0) {
+                // Leave the speaker up: a follow-up note within COOLDOWN_MS
+                // then needs no peripheral switch.
                 _sounding_key_code   = 0;
                 _cooldown_started_ms = now;
                 _audio_state         = AudioState::Cooldown;
             }
             break;
-        }
 
         case AudioState::Cooldown:
             if (_request.pending()) {
@@ -375,7 +370,7 @@ void AppTuner::handle_key_event(const Keyboard::KeyEvent_t& event)
     if (!event.state) {
         // Release. The key may already be sounding, or may still be sitting
         // in the request; either way its tone should end.
-        bool releases_sounding = (_audio_state == AudioState::Playing && event.keyCode == _sounding_key_code);
+        bool releases_sounding = (_audio_state == AudioState::Sounding && event.keyCode == _sounding_key_code);
         bool releases_request  = (_request.pending() && event.keyCode == _request.key_code);
         if (releases_sounding || releases_request) {
             _release_pending = true;
@@ -384,9 +379,9 @@ void AppTuner::handle_key_event(const Keyboard::KeyEvent_t& event)
     }
 
     // Press. Only Listening (cold start) and Cooldown (speaker still warm)
-    // take one; while a note is Playing or Releasing an earlier key still
-    // owns the speaker.
-    if (_audio_state == AudioState::Playing || _audio_state == AudioState::Releasing || _request.pending()) {
+    // take one; while a note is Sounding an earlier key still owns the
+    // speaker.
+    if (_audio_state == AudioState::Sounding || _request.pending()) {
         return;
     }
 

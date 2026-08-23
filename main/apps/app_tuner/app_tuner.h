@@ -7,6 +7,7 @@
 #include "note.h"
 #include "note_history.h"
 #include "pitch_detector.h"
+#include "tone_generator.h"
 #include "tuner_config.h"
 
 #include <mooncake.h>
@@ -42,14 +43,17 @@ private:
     /**
      * The microphone and the speaker share one I2S peripheral, so only one
      * of the two can be up at a time and every switch between them costs
-     * time. The app works around that with a four-state machine driven
+     * time. The app works around that with a three-state machine driven
      * entirely from onRunning(); the key handler only records what it wants
      * to happen and leaves the transitions alone.
+     *
+     * Where a note is in its envelope is the generator's business, not the
+     * state machine's: Sounding covers the whole note, from the attack to
+     * the last sample of the release.
      */
     enum class AudioState {
         Listening,  // mic up, running pitch detection frame by frame
-        Playing,    // speaker up, tone ramping in and holding while its key is down
-        Releasing,  // key is up, tone still sounding but fading out
+        Sounding,   // speaker up, generator feeding it a note
         Cooldown,   // speaker up but silent, so a follow-up note needs no switch
     };
 
@@ -104,23 +108,22 @@ private:
     uint32_t _play_started_ms     = 0;
     uint32_t _cooldown_started_ms = 0;
 
-    // Amplitude envelope of the sounding note. _envelope is the fraction of
-    // _peak_volume currently being driven; it ramps up while Playing and
-    // down from _release_envelope while Releasing.
-    uint8_t _peak_volume         = 0;
-    float _envelope              = 0.0f;
-    float _release_envelope      = 0.0f;
-    uint32_t _release_started_ms = 0;
+    // The played note is synthesised here and handed to the speaker a block
+    // at a time. Blocks rotate so the mixer is never reading the one being
+    // written; see TONE_BLOCK_COUNT.
+    tuner::ToneGenerator _generator;
+    int16_t* _tone_blocks[tuner::TONE_BLOCK_COUNT] = {};
+    size_t _tone_block_index                       = 0;
+    uint32_t _tone_sample_rate_hz                  = 0;
 
     void reset_state();
-    void allocate_frames();
-    void free_frames();
+    void allocate_buffers();
+    void free_buffers();
 
     void enter_listening();
     void leave_listening();
     void start_tone(uint32_t now);
-    void set_envelope(float level);
-    void begin_release(uint32_t now);
+    void feed_speaker();
     void update_audio(uint32_t now);
 
     bool queue_frame();
