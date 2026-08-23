@@ -86,9 +86,22 @@ constexpr size_t TONE_BLOCK_COUNT   = 3;
 // from blocking the frame waiting on the mixer.
 constexpr size_t SPEAKER_SLOTS_PER_CHANNEL = 2;
 
-// Mixer channel the played note owns. Keyboard SFX are off while the app is
-// open, so nothing else is mixing.
-constexpr int TONE_CHANNEL = 0;
+// Notes that can sound at once. A press takes any idle voice, so a new
+// note starts while the previous one is still releasing instead of being
+// dropped -- which is what a run of notes needs, and what playing legato,
+// with the next key down before the last is up, needs even more.
+//
+// Three is enough that a press finds a free voice unless three notes are
+// releasing at once, which takes faster playing than the keyboard allows.
+// Each voice costs TONE_BLOCK_COUNT blocks of its own, so the buffers come
+// to about 18 kB at the sizes above.
+constexpr size_t TONE_VOICE_COUNT = 3;
+
+// First mixer channel the voices own; they take one each from here up.
+// Speaker_Class hands out channels from the top when asked for any, so
+// starting at the bottom stays out of its way. Keyboard SFX are off while
+// the app is open, so nothing else is mixing anyway.
+constexpr int TONE_CHANNEL_FIRST = 0;
 
 // Master volume while the app owns the speaker. Everything else about the
 // level is baked into the samples, so this stays out of the way.

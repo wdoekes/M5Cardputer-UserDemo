@@ -8,7 +8,7 @@
 #include "note_history.h"
 #include "pitch_detector.h"
 #include "tap_tempo.h"
-#include "tone_generator.h"
+#include "tone_voice.h"
 #include "tuner_config.h"
 
 #include <mooncake.h>
@@ -70,6 +70,9 @@ private:
     struct PlayRequest {
         int note         = note::NONE;
         uint8_t key_code = 0;
+        // Set when the key came back up before the frame that starts the
+        // note, so a very short tap still plays and still releases.
+        bool released = false;
 
         bool pending() const
         {
@@ -79,6 +82,7 @@ private:
         {
             note     = note::NONE;
             key_code = 0;
+            released = false;
         }
     };
 
@@ -111,18 +115,11 @@ private:
 
     AudioState _audio_state = AudioState::Listening;
     PlayRequest _request;
-    uint8_t _sounding_key_code    = 0;
-    bool _release_pending         = false;
-    uint32_t _play_started_ms     = 0;
     uint32_t _cooldown_started_ms = 0;
 
-    // The played note is synthesised here and handed to the speaker a block
-    // at a time. Blocks rotate so the mixer is never reading the one being
-    // written; see TONE_BLOCK_COUNT.
-    tuner::ToneGenerator _generator;
-    int16_t* _tone_blocks[tuner::TONE_BLOCK_COUNT] = {};
-    size_t _tone_block_index                       = 0;
-    uint32_t _tone_sample_rate_hz                  = 0;
+    // Notes are synthesised one per voice, so a press lands on a free voice
+    // rather than waiting for the previous note to finish releasing.
+    tuner::ToneVoice _voices[tuner::TONE_VOICE_COUNT];
 
     void reset_state();
     void allocate_buffers();
@@ -131,7 +128,10 @@ private:
     void enter_listening();
     void leave_listening();
     void start_tone(uint32_t now);
-    void feed_speaker();
+    void update_voices(uint32_t now);
+    void release_voices_for_key(uint8_t key_code);
+    tuner::ToneVoice* idle_voice();
+    bool any_voice_sounding() const;
     void update_audio(uint32_t now);
 
     bool queue_frame();

@@ -5,6 +5,7 @@
  */
 #include "tone_generator.h"
 #include "tuner_config.h"
+#include "note.h"
 #include <algorithm>
 #include <cmath>
 
@@ -33,7 +34,17 @@ float ramp(float from, float to, uint32_t elapsed, uint32_t duration)
     return from + (to - from) * ((float)elapsed / duration);
 }
 
+// Decibels spanned by a factor of ten in amplitude.
+constexpr float DB_PER_AMPLITUDE_DECADE = 20.0f;
+
 }  // namespace
+
+float gain_for_note(int midi)
+{
+    float octaves_above = (float)(midi - TONE_GAIN_REF_NOTE) / note::SEMITONES_PER_OCTAVE;
+    float decibels      = TONE_GAIN_DB_PER_OCTAVE * octaves_above;
+    return std::clamp(std::pow(10.0f, decibels / DB_PER_AMPLITUDE_DECADE), TONE_GAIN_MIN, 1.0f);
+}
 
 void ToneGenerator::start(float frequency_hz, float gain, uint32_t sample_rate_hz)
 {

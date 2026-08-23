@@ -26,6 +26,11 @@ namespace tuner {
  * so a key tapped and let go mid-attack does not jump to full first. The
  * final block of a note ends at amplitude zero, leaving nothing to click.
  */
+// Amplitude scale for a note, falling by TONE_GAIN_DB_PER_OCTAVE for every
+// octave above TONE_GAIN_REF_NOTE, so that high notes do not drown out low
+// ones. Pass it to ToneGenerator::start().
+float gain_for_note(int midi);
+
 class ToneGenerator {
 public:
     // Begins a note. `gain` scales the whole envelope, in [0, 1]; it is how

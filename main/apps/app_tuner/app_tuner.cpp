@@ -41,17 +41,6 @@ int accidental_semitones()
     return NATURAL_SEMITONES;
 }
 
-constexpr float DB_PER_AMPLITUDE_DECADE = 20.0f;
-
-// Amplitude scale for a note, falling by TONE_GAIN_DB_PER_OCTAVE for every
-// octave above the reference so that high notes do not drown out low ones.
-float gain_for_note(int midi)
-{
-    float octaves_above = (float)(midi - TONE_GAIN_REF_NOTE) / note::SEMITONES_PER_OCTAVE;
-    float decibels      = TONE_GAIN_DB_PER_OCTAVE * octaves_above;
-    return std::clamp(std::pow(10.0f, decibels / DB_PER_AMPLITUDE_DECADE), TONE_GAIN_MIN, 1.0f);
-}
-
 }  // namespace
 
 /* -------------------------------------------------------------------------- */
@@ -114,12 +103,14 @@ void AppTuner::onClose()
         GetHAL().speaker.end();
     }
 
+    // Free while both peripherals are down, so nothing can still be reading
+    // a voice's blocks or a microphone frame.
+    free_buffers();
+
     // Hand the speaker back the way the rest of the firmware expects it:
     // up, and at the volume the key clicks are mixed for.
     GetHAL().speaker.begin();
     GetHAL().speaker.setVolume(audio::DEFAULT_VOLUME);
-
-    free_buffers();
 
     audio::set_keyboard_sfx_enable(true);
 }
@@ -134,15 +125,8 @@ void AppTuner::reset_state()
     forget_candidate();
 
     _request.clear();
-    _sounding_key_code   = 0;
-    _release_pending     = false;
-    _play_started_ms     = 0;
     _cooldown_started_ms = 0;
     _audio_state         = AudioState::Listening;
-
-    _generator           = ToneGenerator();
-    _tone_block_index    = 0;
-    _tone_sample_rate_hz = 0;
 }
 
 void AppTuner::allocate_buffers()
@@ -154,10 +138,9 @@ void AppTuner::allocate_buffers()
     _detect_index = 0;
     _mic_primed   = false;
 
-    for (size_t i = 0; i < TONE_BLOCK_COUNT; ++i) {
-        _tone_blocks[i] = new int16_t[TONE_BLOCK_SAMPLES]();
+    for (size_t i = 0; i < TONE_VOICE_COUNT; ++i) {
+        _voices[i].open(TONE_CHANNEL_FIRST + (int)i);
     }
-    _tone_block_index = 0;
 }
 
 void AppTuner::free_buffers()
@@ -166,9 +149,8 @@ void AppTuner::free_buffers()
         delete[] _frames[i];
         _frames[i] = nullptr;
     }
-    for (size_t i = 0; i < TONE_BLOCK_COUNT; ++i) {
-        delete[] _tone_blocks[i];
-        _tone_blocks[i] = nullptr;
+    for (ToneVoice& voice : _voices) {
+        voice.close();
     }
 }
 
@@ -204,40 +186,76 @@ void AppTuner::leave_listening()
     GetHAL().mic.end();
 }
 
+ToneVoice* AppTuner::idle_voice()
+{
+    for (ToneVoice& voice : _voices) {
+        if (!voice.sounding()) {
+            return &voice;
+        }
+    }
+    return nullptr;
+}
+
+bool AppTuner::any_voice_sounding() const
+{
+    for (const ToneVoice& voice : _voices) {
+        if (voice.sounding()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void AppTuner::start_tone(uint32_t now)
 {
-    // How loud the note is lives in the samples, so the master volume is
-    // pinned out of the way. Set here rather than at the peripheral switch,
-    // so a note retriggered out of Cooldown gets the same treatment.
+    ToneVoice* voice = idle_voice();
+    if (voice == nullptr) {
+        // Every voice is still ringing. Dropping the press is the only
+        // option left: a voice can be reused only once the mixer is done
+        // with the blocks it already holds, and queueing a note behind them
+        // would start it from whatever amplitude the old one was cut at.
+        _request.clear();
+        return;
+    }
+
+    // How loud a note is lives in its samples, so the master volume is
+    // pinned out of the way.
     GetHAL().speaker.setVolume(TONE_MASTER_VOLUME);
 
     // Generate at the speaker's own rate so the mixer copies the samples
     // straight through instead of resampling them.
-    _tone_sample_rate_hz = GetHAL().speaker.config().sample_rate;
-    _generator.start(note::to_frequency(_request.note), gain_for_note(_request.note), _tone_sample_rate_hz);
-
-    _sounding_key_code = _request.key_code;
-    _play_started_ms   = now;
+    voice->start(_request.note, _request.key_code, now, GetHAL().speaker.config().sample_rate);
+    if (_request.released) {
+        voice->release();
+    }
     _request.clear();
     _audio_state = AudioState::Sounding;
 
     // Hand over the first blocks now rather than a frame later, so the note
     // starts on the key press instead of after it.
-    feed_speaker();
+    voice->feed();
 }
 
-void AppTuner::feed_speaker()
+void AppTuner::update_voices(uint32_t now)
 {
-    // playRaw() blocks until the reserved slot frees, so only call it while
-    // one is free; otherwise a frame would stall waiting on the mixer.
-    while (GetHAL().speaker.isPlaying(TONE_CHANNEL) < SPEAKER_SLOTS_PER_CHANNEL) {
-        int16_t* block = _tone_blocks[_tone_block_index];
-        size_t count   = _generator.fill(block, TONE_BLOCK_SAMPLES);
-        if (count == 0) {
-            return;
+    for (ToneVoice& voice : _voices) {
+        if (!voice.sounding()) {
+            continue;
         }
-        _tone_block_index = (_tone_block_index + 1) % TONE_BLOCK_COUNT;
-        GetHAL().speaker.playRaw(block, count, _tone_sample_rate_hz, false, 1, TONE_CHANNEL, false);
+        // MAX_PLAY_MS catches a release event that never arrived.
+        if ((now - voice.started_ms()) > MAX_PLAY_MS) {
+            voice.release();
+        }
+        voice.feed();
+    }
+}
+
+void AppTuner::release_voices_for_key(uint8_t key_code)
+{
+    for (ToneVoice& voice : _voices) {
+        if (voice.sounding() && voice.key_code() == key_code) {
+            voice.release();
+        }
     }
 }
 
@@ -256,18 +274,13 @@ void AppTuner::update_audio(uint32_t now)
             break;
 
         case AudioState::Sounding:
-            // MAX_PLAY_MS catches a release event that never arrived.
-            if (_release_pending || (now - _play_started_ms) > MAX_PLAY_MS) {
-                _release_pending = false;
-                _generator.release();
+            if (_request.pending()) {
+                start_tone(now);
             }
-            feed_speaker();
-            // The generator runs out first; the speaker keeps going until
-            // the blocks already handed over have played.
-            if (_generator.finished() && GetHAL().speaker.isPlaying(TONE_CHANNEL) == 0) {
+            update_voices(now);
+            if (!any_voice_sounding()) {
                 // Leave the speaker up: a follow-up note within COOLDOWN_MS
                 // then needs no peripheral switch.
-                _sounding_key_code   = 0;
                 _cooldown_started_ms = now;
                 _audio_state         = AudioState::Cooldown;
             }
@@ -389,12 +402,15 @@ void AppTuner::handle_key_event(const Keyboard::KeyEvent_t& event)
     }
 
     if (!event.state) {
-        // Release. The key may already be sounding, or may still be sitting
-        // in the request; either way its tone should end.
-        bool releases_sounding = (_audio_state == AudioState::Sounding && event.keyCode == _sounding_key_code);
-        bool releases_request  = (_request.pending() && event.keyCode == _request.key_code);
-        if (releases_sounding || releases_request) {
-            _release_pending = true;
+        // Release. Releasing a voice touches no hardware -- it moves the
+        // envelope into its release ramp and nothing else -- so it can
+        // happen right here, where starting a note cannot.
+        release_voices_for_key(event.keyCode);
+
+        // The note may not have started yet if the key was tapped and let go
+        // inside one frame. Remember, so it still plays and still releases.
+        if (_request.pending() && event.keyCode == _request.key_code) {
+            _request.released = true;
         }
         return;
     }
@@ -406,10 +422,10 @@ void AppTuner::handle_key_event(const Keyboard::KeyEvent_t& event)
         return;
     }
 
-    // Press. Only Listening (cold start) and Cooldown (speaker still warm)
-    // take one; while a note is Sounding an earlier key still owns the
-    // speaker.
-    if (_audio_state == AudioState::Sounding || _request.pending()) {
+    // Press. One request is carried per frame, which is far more often than
+    // fingers can produce presses; onRunning() picks a voice for it, and may
+    // have to switch the I2S peripheral over first.
+    if (_request.pending()) {
         return;
     }
 
