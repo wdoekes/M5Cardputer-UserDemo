@@ -33,6 +33,18 @@ constexpr int PLAY_LOWEST_OCTAVE = 4;
 // for a key whose release event never arrives.
 constexpr uint32_t MAX_PLAY_MS = 5000;
 
+// Amplitude envelope of a played note: the tone ramps up over FADE_IN_MS
+// when it starts and back down over FADE_OUT_MS when its key is released,
+// so neither edge is the step discontinuity that tone()/stop() would leave
+// on their own.
+//
+// The ramp is stepped once per rendered frame, so these have to span
+// several frames to be a ramp at all -- a two-millisecond fade would land
+// on a single step and click exactly as before. A note is also never
+// shorter than its own fade-out, however briefly its key was tapped.
+constexpr uint32_t FADE_IN_MS  = 40;
+constexpr uint32_t FADE_OUT_MS = 60;
+
 // How long the speaker stays open and silent after a note ends. A follow-up
 // note within this window reuses the speaker instead of tearing it down and
 // bringing the mic back up, so a run of notes is not paced by two peripheral

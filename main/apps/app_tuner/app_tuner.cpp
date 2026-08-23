@@ -14,6 +14,7 @@
 #include <mooncake_log.h>
 
 #include <algorithm>
+#include <cmath>
 
 using namespace mooncake;
 using namespace tuner;
@@ -42,6 +43,17 @@ int accidental_semitones()
         return FLAT_SEMITONES;
     }
     return NATURAL_SEMITONES;
+}
+
+// How far along a ramp of `duration_ms` starting at `since_ms` we are, as a
+// fraction in [0, 1].
+float ramp_progress(uint32_t now, uint32_t since_ms, uint32_t duration_ms)
+{
+    uint32_t elapsed = now - since_ms;
+    if (duration_ms == 0 || elapsed >= duration_ms) {
+        return 1.0f;
+    }
+    return (float)elapsed / duration_ms;
 }
 
 // The speaker turns harsh as the pitch climbs, so taper the drive level off
@@ -138,6 +150,11 @@ void AppTuner::reset_state()
     _play_started_ms     = 0;
     _cooldown_started_ms = 0;
     _audio_state         = AudioState::Listening;
+
+    _peak_volume        = 0;
+    _envelope           = 0.0f;
+    _release_envelope   = 0.0f;
+    _release_started_ms = 0;
 }
 
 void AppTuner::allocate_frames()
@@ -170,9 +187,9 @@ void AppTuner::enter_listening()
     GetHAL().speaker.end();
     GetHAL().speaker.setVolume(UINT8_MAX);
 
-    auto config                = GetHAL().mic.config();
-    config.magnification       = MIC_MAGNIFICATION;
-    config.noise_filter_level  = MIC_NOISE_FILTER_LEVEL;
+    auto config               = GetHAL().mic.config();
+    config.magnification      = MIC_MAGNIFICATION;
+    config.noise_filter_level = MIC_NOISE_FILTER_LEVEL;
     GetHAL().mic.config(config);
     GetHAL().mic.begin();
 
@@ -192,13 +209,35 @@ void AppTuner::leave_listening()
 
 void AppTuner::start_tone(uint32_t now)
 {
-    GetHAL().speaker.setVolume(volume_for_note(_request.note));
+    _peak_volume = volume_for_note(_request.note);
+
+    // Start silent; the attack ramp in update_audio() brings it up from
+    // here, so the tone does not begin on a step edge.
+    set_envelope(0.0f);
     GetHAL().speaker.tone(note::to_frequency(_request.note), TONE_HOLD_FOREVER_MS);
 
     _sounding_key_code = _request.key_code;
     _play_started_ms   = now;
     _request.clear();
     _audio_state = AudioState::Playing;
+}
+
+void AppTuner::set_envelope(float level)
+{
+    _envelope = level;
+    // Speaker_Class squares the master volume before mixing, so driving the
+    // byte linearly already comes out as a curve rather than a straight line.
+    GetHAL().speaker.setVolume((uint8_t)std::lround(_peak_volume * level));
+}
+
+void AppTuner::begin_release(uint32_t now)
+{
+    // Fade from wherever the attack actually got to, so a key tapped and
+    // let go mid-attack does not jump to full volume on its way out.
+    _release_envelope   = _envelope;
+    _release_started_ms = now;
+    _release_pending    = false;
+    _audio_state        = AudioState::Releasing;
 }
 
 void AppTuner::update_audio(uint32_t now)
@@ -216,17 +255,26 @@ void AppTuner::update_audio(uint32_t now)
             break;
 
         case AudioState::Playing:
+            set_envelope(ramp_progress(now, _play_started_ms, FADE_IN_MS));
             // MAX_PLAY_MS catches a release event that never arrived.
             if (_release_pending || (now - _play_started_ms) > MAX_PLAY_MS) {
-                // Silence the tone but leave the speaker up, so a follow-up
-                // note within COOLDOWN_MS needs no peripheral switch.
+                begin_release(now);
+            }
+            break;
+
+        case AudioState::Releasing: {
+            float remaining = 1.0f - ramp_progress(now, _release_started_ms, FADE_OUT_MS);
+            set_envelope(_release_envelope * remaining);
+            if (remaining <= 0.0f) {
+                // Faded out: silence the tone but leave the speaker up, so a
+                // follow-up note within COOLDOWN_MS needs no peripheral switch.
                 GetHAL().speaker.stop();
-                _release_pending     = false;
                 _sounding_key_code   = 0;
                 _cooldown_started_ms = now;
                 _audio_state         = AudioState::Cooldown;
             }
             break;
+        }
 
         case AudioState::Cooldown:
             if (_request.pending()) {
@@ -336,8 +384,9 @@ void AppTuner::handle_key_event(const Keyboard::KeyEvent_t& event)
     }
 
     // Press. Only Listening (cold start) and Cooldown (speaker still warm)
-    // take one; during Playing an earlier key is still down.
-    if (_audio_state == AudioState::Playing || _request.pending()) {
+    // take one; while a note is Playing or Releasing an earlier key still
+    // owns the speaker.
+    if (_audio_state == AudioState::Playing || _audio_state == AudioState::Releasing || _request.pending()) {
         return;
     }
 

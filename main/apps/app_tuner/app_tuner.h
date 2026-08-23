@@ -41,14 +41,15 @@ public:
 private:
     /**
      * The microphone and the speaker share one I2S peripheral, so only one
-     * of the two can be up at a time and every switch between them pops
-     * audibly. The app works around that with a three-state machine driven
+     * of the two can be up at a time and every switch between them costs
+     * time. The app works around that with a four-state machine driven
      * entirely from onRunning(); the key handler only records what it wants
      * to happen and leaves the transitions alone.
      */
     enum class AudioState {
         Listening,  // mic up, running pitch detection frame by frame
-        Playing,    // speaker up, holding a tone for as long as its key is down
+        Playing,    // speaker up, tone ramping in and holding while its key is down
+        Releasing,  // key is up, tone still sounding but fading out
         Cooldown,   // speaker up but silent, so a follow-up note needs no switch
     };
 
@@ -103,6 +104,14 @@ private:
     uint32_t _play_started_ms     = 0;
     uint32_t _cooldown_started_ms = 0;
 
+    // Amplitude envelope of the sounding note. _envelope is the fraction of
+    // _peak_volume currently being driven; it ramps up while Playing and
+    // down from _release_envelope while Releasing.
+    uint8_t _peak_volume         = 0;
+    float _envelope              = 0.0f;
+    float _release_envelope      = 0.0f;
+    uint32_t _release_started_ms = 0;
+
     void reset_state();
     void allocate_frames();
     void free_frames();
@@ -110,6 +119,8 @@ private:
     void enter_listening();
     void leave_listening();
     void start_tone(uint32_t now);
+    void set_envelope(float level);
+    void begin_release(uint32_t now);
     void update_audio(uint32_t now);
 
     bool queue_frame();
